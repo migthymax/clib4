@@ -1118,3 +1118,5 @@ Clib4Call(sigsuspend, 4396);
 Clib4Call(spawnve, 4400);
 Clib4Call(sigpause, 4404);
 Clib4Call(sigwait, 4408);
+Clib4Call(sigwaitinfo, 4412);
+Clib4Call(sigtimedwait, 4412);

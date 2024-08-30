@@ -1349,6 +1349,8 @@ struct Clib4IFace {
     int (* spawnve) (const char *path, const char **argv, char **deltaenv, const char *dir, int fhin, int fhout, int fherr);                         /* 4400 */
     int (* sigpause) (int sig_or_mask, int is_sig);                                                                                                  /* 4404 */
     int (* sigwait) (const sigset_t *set, int *sig);                                                                                                 /* 4408 */
+	int (* sigwaitinfo) (const sigset_t *set, siginfo_t *info);
+	int (* sigtimedwait) (const sigset_t *set, siginfo_t *info, const struct timespec *timeout);
 };
 
 #ifdef __PIC__
