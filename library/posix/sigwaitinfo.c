@@ -8,5 +8,16 @@
 
 int
 sigwaitinfo(const sigset_t *set, siginfo_t *info) {
-	return sigtimedwait (set, info, 0 );
+	int ret;
+	
+	ENTER();
+
+	SHOWPOINTER(set);
+	SHOWPOINTER(info);
+
+	ret = sigtimedwait (set, info, 0 );
+
+	RETURN(ret);
+
+	return ret;
 }

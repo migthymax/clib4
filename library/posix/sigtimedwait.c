@@ -21,6 +21,13 @@ do_sigtimedwait(struct _clib4 *__clib4,const sigset_t *set, siginfo_t *info, con
     struct sigaction action;
     int save_errno;
     int this;
+
+	ENTER();
+
+	SHOWPOINTER(set);
+	SHOWPOINTER(info);
+	SHOWPOINTER(timeout);
+
     /* Prepare set.  */
     sigfillset(&tmp_mask);
     /* Unblock all signals in the SET and register our nice handler.  */
@@ -52,6 +59,9 @@ restore_handler:
 		info->si_signo = __clib4->__was_sig;
 		// TODO: ML: addtional fields, from where to get the data
 	}
+
+	RETURN(__clib4->__was_sig);
+
     return __clib4->__was_sig;
 }
 
