@@ -13,12 +13,22 @@ ignore_signal(int sig) {
     __clib4->__was_sig = sig;
 }
 
+void DoStuff(void);
+
+void DoStuff(void) {
+    struct itimerval old_value;
+    getitimer(ITIMER_REAL, &old_value);
+    printf("Timer went off. getitimer now is %d sec, %d msec.\n",
+           (int) old_value.it_value.tv_sec,
+           (int) old_value.it_value.tv_usec);
+}
+
 static int
 do_sigtimedwait(struct _clib4 *__clib4,const sigset_t *set, siginfo_t *info, const struct timespec64 *timeout) {
-	// TODO: ML: How to set up an timout event 
 	sigset_t tmp_mask;
     struct sigaction saved[NSIG];
     struct sigaction action;
+	struct itimerval it_val;
     int save_errno;
     int this;
 
@@ -37,7 +47,7 @@ do_sigtimedwait(struct _clib4 *__clib4,const sigset_t *set, siginfo_t *info, con
     /* Make sure we recognize error conditions by setting WAS_SIG to a
        value which does not describe a legal signal number.  */
     __clib4->__was_sig = -1;
-    for (this = 1; this < NSIG; ++this)
+    for (this = 1; this < NSIG; ++this) {
         if (sigismember(set, this)) {
             /* Unblock this signal.  */
             sigdelset(&tmp_mask, this);
@@ -45,8 +55,37 @@ do_sigtimedwait(struct _clib4 *__clib4,const sigset_t *set, siginfo_t *info, con
             if (sigaction(this, &action, &saved[this]) != 0)
                 goto restore_handler;
         }
+	}
+	/* Prepare a timmer if timeout is requested */
+	if( timeout ) {
+		SHOWMSG( "TIMEOUT requestes!" );
+		if (signal(SIGALRM, (void (*)(int)) DoStuff) == SIG_ERR) {
+			perror("Unable to catch SIGALRM");
+			exit(1);
+		}
+	/*		
+		if (!sigismember(set, SIGALRM)) {
+			SHOWMSG( "SIGALARM NOT PART OF THE SET!" );
+            /* Unblock this signal.  * /
+            sigdelset(&tmp_mask, SIGALRM);
+            /* Register temporary action handler.  * /
+            if ( sigaction(SIGALRM, &action, NULL) != 0)
+                goto restore_handler;
+			SHOWMSG( "ALARAM HA LDER REGSITERED!" );
+		}
+		*/
+		it_val.it_interval.tv_sec 	= 0;
+		it_val.it_interval.tv_usec	= 0;
+		it_val.it_value.tv_sec		= timeout->tv_sec;
+    	it_val.it_value.tv_usec  	= timeout->tv_nsec;
+
+		if (setitimer(ITIMER_REAL, &it_val, NULL ) == -1 ) {
+	        perror("error calling setitimer()");
+    	    exit(1);
+		}
+	}
     /* Now we can wait for signals.  */
-    sigsuspend(&tmp_mask);
+    sigsuspend(&tmp_mask);	
 restore_handler:
     save_errno = errno;
     while (--this >= 1)
@@ -58,6 +97,12 @@ restore_handler:
 	if( info ) {
 		info->si_signo = __clib4->__was_sig;
 		// TODO: ML: addtional fields, from where to get the data
+	}
+	/* Check if it ran into a timeout */
+	if(__clib4->__was_sig ==  SIGALRM ) {
+		__set_errno(EAGAIN);
+
+		__clib4->__was_sig = -1;
 	}
 
 	RETURN(__clib4->__was_sig);
