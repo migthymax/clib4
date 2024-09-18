@@ -4,6 +4,7 @@
 #include <proto/dos.h>
 #include <proto/exec.h>
 
+#include <stdio.h>
 #include <setjmp.h>
 #include "map.h"
 #include "uuid.h"
@@ -68,6 +69,7 @@ struct Clib4Children {
     uint32  pid;        /* the process PID */
     gid_t   groupId;    /* Group ID of process */
     uint32  returnCode; /* the return code of process */
+    FILE    *pipe;
 };
 
 int libReserved(void);

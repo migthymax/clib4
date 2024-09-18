@@ -122,7 +122,6 @@ tcgetattr(int file_descriptor, struct termios *user_tios) {
 
     if (FLAG_IS_SET(fd->fd_Flags, FDF_TERMIOS)) {
         assert(fd->fd_Aux != NULL);
-
         memcpy(user_tios, fd->fd_Aux, sizeof(struct termios));
     } else {
         tios = __get_termios(fd);
