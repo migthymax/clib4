@@ -14,93 +14,6 @@
 
 #include "wof_allocator.h"
 
-#define BOOL int
-#define TRUE 1
-#define FALSE 0
-
-/* https://mail.gnome.org/archives/gtk-devel-list/2004-December/msg00091.html
- * The 2*sizeof(size_t) alignment here is borrowed from GNU libc, so it should
- * be good most everywhere. It is more conservative than is needed on some
- * 64-bit platforms, but ia64 does require a 16-byte alignment. The SIMD
- * extensions for x86 and ppc32 would want a larger alignment than this, but
- * we don't need to do better than malloc.
- */
-#define WOF_ALIGN_AMOUNT (2 * sizeof (size_t))
-#define WOF_ALIGN_SIZE(SIZE) ((~(WOF_ALIGN_AMOUNT-1)) & \
-        ((SIZE) + (WOF_ALIGN_AMOUNT-1)))
-
-/* When required, allocate more memory from the OS in chunks of this size.
- * 8MB is a pretty arbitrary value - it's big enough that it should last a while
- * and small enough that a mostly-unused one doesn't waste *too* much. It's
- * also a nice power of two, of course. */
-#define WOF_BLOCK_SIZE (8 * 1024 * 1024)
-
-/* The header for an entire OS-level 'block' of memory */
-typedef struct _wof_block_hdr_t {
-    struct _wof_block_hdr_t *prev, *next;
-} wof_block_hdr_t;
-
-/* The header for a single 'chunk' of memory as returned from alloc/realloc.
- * The 'jumbo' flag indicates an allocation larger than a normal-sized block
- * would be capable of serving. If this is set, it is the only chunk in the
- * block and the other chunk header fields are irrelevant.
- */
-typedef struct _wof_chunk_hdr_t {
-    int prev;
-
-    /* flags */
-    int last: 1;
-    int used: 1;
-    int jumbo: 1;
-
-    int len: 29;
-} wof_chunk_hdr_t;
-
-/* Handy macros for navigating the chunks in a block as if they were a
- * doubly-linked list. */
-#define WOF_CHUNK_PREV(CHUNK) ((CHUNK)->prev \
-        ? ((wof_chunk_hdr_t*)(((unsigned char*)(CHUNK)) - (CHUNK)->prev)) \
-        : NULL)
-
-#define WOF_CHUNK_NEXT(CHUNK) ((CHUNK)->last \
-        ? NULL \
-        : ((wof_chunk_hdr_t*)(((unsigned char*)(CHUNK)) + (CHUNK)->len)))
-
-#define WOF_CHUNK_HEADER_SIZE WOF_ALIGN_SIZE(sizeof(wof_chunk_hdr_t))
-
-/* other handy chunk macros */
-#define WOF_CHUNK_TO_DATA(CHUNK)  ((void*)((unsigned char*)(CHUNK) + WOF_CHUNK_HEADER_SIZE))
-#define WOF_DATA_TO_CHUNK(DATA)   ((wof_chunk_hdr_t*)((unsigned char*)(DATA) - WOF_CHUNK_HEADER_SIZE))
-#define WOF_CHUNK_DATA_LEN(CHUNK) ((CHUNK)->len - WOF_CHUNK_HEADER_SIZE)
-
-/* some handy block macros */
-#define WOF_BLOCK_HEADER_SIZE     WOF_ALIGN_SIZE(sizeof(wof_block_hdr_t))
-#define WOF_BLOCK_TO_CHUNK(BLOCK) ((wof_chunk_hdr_t*)((unsigned char*)(BLOCK) + WOF_BLOCK_HEADER_SIZE))
-#define WOF_CHUNK_TO_BLOCK(CHUNK) ((wof_block_hdr_t*)((unsigned char*)(CHUNK) - WOF_BLOCK_HEADER_SIZE))
-
-#define WOF_BLOCK_MAX_ALLOC_SIZE (WOF_BLOCK_SIZE - \
-        (WOF_BLOCK_HEADER_SIZE + WOF_CHUNK_HEADER_SIZE))
-
-/* This is what the 'data' section of a chunk contains if it is free. */
-typedef struct _wof_free_hdr_t {
-    wof_chunk_hdr_t *prev, *next;
-} wof_free_hdr_t;
-
-/* Handy macro for accessing the free-header of a chunk */
-#define WOF_GET_FREE(CHUNK) ((wof_free_hdr_t*)WOF_CHUNK_TO_DATA(CHUNK))
-
-/* The size of the free header does not need to be aligned, as it is never used
- * in any way that would affect the alignment of the memory returned from
- * wof_alloc. This macro is defined just for consistency with all the other
- * WOF_*_SIZE macros (which do need to be aligned). */
-#define WOF_FREE_HEADER_SIZE sizeof(wof_free_hdr_t)
-
-struct _wof_allocator_t {
-    wof_block_hdr_t *block_list;
-    wof_chunk_hdr_t *master_head;
-    wof_chunk_hdr_t *recycler_head;
-};
-
 /* MASTER/RECYCLER HELPERS */
 
 /* Cycles the recycler. See the design notes in the readme for more details. */
@@ -108,14 +21,13 @@ static void
 wof_cycle_recycler(wof_allocator_t *allocator) {
     wof_chunk_hdr_t *chunk;
     wof_free_hdr_t *free_chunk;
-    struct _clib4 *__clib4 = __CLIB4;
 
-    ObtainSemaphore(__clib4->__wof_allocator_semaphore);
+    ObtainSemaphore(allocator->semaphore);
 
     chunk = allocator->recycler_head;
 
     if (chunk == NULL) {
-        ReleaseSemaphore(__clib4->__wof_allocator_semaphore);
+        ReleaseSemaphore(allocator->semaphore);
         return;
     }
 
@@ -135,7 +47,7 @@ wof_cycle_recycler(wof_allocator_t *allocator) {
         /* Just rotate everything. */
         allocator->recycler_head = free_chunk->next;
     }
-    ReleaseSemaphore(__clib4->__wof_allocator_semaphore);
+    ReleaseSemaphore(allocator->semaphore);
 }
 
 /* Adds a chunk from the recycler. */
@@ -309,7 +221,7 @@ wof_split_free_chunk(wof_allocator_t *allocator, wof_chunk_hdr_t *chunk,  const 
     aligned_size = WOF_ALIGN_SIZE(size) + WOF_CHUNK_HEADER_SIZE;
 
     if (WOF_CHUNK_DATA_LEN(chunk) < aligned_size + WOF_FREE_HEADER_SIZE) {
-        /* If the available space is not enought to store all of
+        /* If the available space is not enough to store all of
          * (hdr + requested size + alignment padding + hdr + free-header) then
          * just remove the current chunk from the free list and return, since we
          * can't usefully split it. */
@@ -486,7 +398,7 @@ wof_new_block(wof_allocator_t *allocator) {
     wof_block_hdr_t *block;
 
     /* allocate the new block and add it to the block list */
-    block = (wof_block_hdr_t *) AllocVecTags(WOF_BLOCK_SIZE, AVT_Type, MEMF_SHARED, TAG_DONE);
+    block = (wof_block_hdr_t *) AllocVecTags(WOF_BLOCK_SIZE, AVT_Type, MEMF_PRIVATE, TAG_DONE);
     if (block == NULL) {
         return;
     }
@@ -509,7 +421,7 @@ wof_alloc_jumbo(wof_allocator_t *allocator, const size_t size) {
     block = (wof_block_hdr_t *) AllocVecTags(size
                                              + WOF_BLOCK_HEADER_SIZE
                                              + WOF_CHUNK_HEADER_SIZE,
-                                             AVT_Type, MEMF_SHARED,
+                                             AVT_Type, MEMF_PRIVATE,
                                              TAG_DONE);
     if (block == NULL) {
         return NULL;
@@ -544,6 +456,7 @@ wof_free_jumbo(wof_allocator_t *allocator, wof_chunk_hdr_t *chunk) {
     wof_remove_from_block_list(allocator, block);
 
     FreeVec(block);
+    block = NULL;
 }
 
 /* Reallocs special 'jumbo' blocks of sizes that won't fit normally. */
@@ -574,7 +487,7 @@ wof_realloc_jumbo(wof_allocator_t *allocator, wof_chunk_hdr_t *chunk, const size
             newptr = (wof_block_hdr_t *) AllocVecTags(size
                                                       + WOF_BLOCK_HEADER_SIZE
                                                       + WOF_CHUNK_HEADER_SIZE,
-                                                      AVT_Type, MEMF_SHARED,
+                                                      AVT_Type, MEMF_PRIVATE,
                                                       TAG_DONE);
 
             if (newptr == NULL) {
@@ -585,6 +498,7 @@ wof_realloc_jumbo(wof_allocator_t *allocator, wof_chunk_hdr_t *chunk, const size
 
             /* Free old block */
             FreeVec(block);
+            block = NULL;
 
             if (newptr->next) {
                 newptr->next->prev = newptr;
@@ -606,7 +520,7 @@ wof_realloc_jumbo(wof_allocator_t *allocator, wof_chunk_hdr_t *chunk, const size
         newptr = (wof_block_hdr_t *) AllocVecTags(size
                                                   + WOF_BLOCK_HEADER_SIZE
                                                   + WOF_CHUNK_HEADER_SIZE,
-                                                  AVT_Type, MEMF_SHARED,
+                                                  AVT_Type, MEMF_PRIVATE,
                                                   TAG_DONE);
 
         if (newptr == NULL) {
@@ -617,6 +531,7 @@ wof_realloc_jumbo(wof_allocator_t *allocator, wof_chunk_hdr_t *chunk, const size
 
         /* Free old block */
         FreeVec(block);
+        block = NULL;
 
         if (newptr->next) {
             newptr->next->prev = newptr;
@@ -881,6 +796,9 @@ wof_gc(wof_allocator_t *allocator) {
 
 void
 wof_allocator_destroy(wof_allocator_t *allocator) {
+
+    __delete_semaphore(allocator->semaphore);
+
     /* The combination of free_all and gc returns all our memory to the OS
      * except for the struct itself */
     wof_free_all(allocator);
@@ -888,13 +806,14 @@ wof_allocator_destroy(wof_allocator_t *allocator) {
 
     /* then just free the struct */
     FreeVec(allocator);
+    allocator = NULL;
 }
 
 wof_allocator_t *
 wof_allocator_new(void) {
     ENTER();
 
-    wof_allocator_t *allocator = (wof_allocator_t *) AllocVecTags(sizeof(wof_allocator_t), MEMF_SHARED, AVT_ClearWithValue, 0, TAG_DONE);
+    wof_allocator_t *allocator = (wof_allocator_t *) AllocVecTags(sizeof(wof_allocator_t), MEMF_PRIVATE, AVT_ClearWithValue, 0, TAG_DONE);
     if (allocator == NULL) {
         SHOWMSG("Unable to create wof_allocator");
         RETURN(NULL);
@@ -904,6 +823,7 @@ wof_allocator_new(void) {
     allocator->block_list = NULL;
     allocator->master_head = NULL;
     allocator->recycler_head = NULL;
+    allocator->semaphore = __create_semaphore();
 
     RETURN(allocator);
     return allocator;

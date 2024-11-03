@@ -5,15 +5,16 @@
 #ifndef _DOS_H
 #define _DOS_H
 
-#include <features.h>
+#include "include/features.h"
 
-#include <stdio.h>
-#include <stddef.h>
-#include <sys/resource.h>
-#include <sys/syslimits.h>
-#include <wchar.h>
-#include <setjmp.h>
-#include <resolv.h>
+#include "include/stdio.h"
+#include "include/stddef.h"
+#include "include/signal.h"
+#include "include/sys/resource.h"
+#include "include/sys/syslimits.h"
+#include "include/wchar.h"
+#include "include/setjmp.h"
+#include "include/resolv.h"
 #include <exec/types.h>
 #include <exec/lists.h>
 #include <exec/semaphores.h>
@@ -206,7 +207,7 @@ struct _clib4 {
 
     BOOL __unix_path_semantics;
 
-    BOOL  unused6;
+    BOOL  __fully_initialized;
     int32_t __pipenum;
     void *__pipe_semaphore;
     BOOL  unused3;
@@ -293,7 +294,7 @@ struct _clib4 {
 
     /* Wof Allocator main pointer */
     wof_allocator_t *__wof_allocator;
-    struct SignalSemaphore *__wof_allocator_semaphore;
+    void *unused6;
 
     /* Names of files and directories to delete when shutting down. */
     struct MinList __unlink_list;
@@ -337,7 +338,8 @@ struct _clib4 {
     struct WBStartup *__WBenchMsg;
     BOOL __no_standard_io;
 
-    void *unused5;
+    /* The pointer to the data made by tgetent is left here for tgetnum, tgetflag and tgetstr to find.  */
+    char *term_entry;
 
     /* CPU cache line size; used to align I/O buffers for best performance. */
     ULONG __cache_line_size;
@@ -351,7 +353,7 @@ struct _clib4 {
     BPTR output;
     BPTR input;
 
-    BOOL unused4;
+    BOOL __environment_allocated;
 
     /*
      * The following variables are part of libnet.a, which provides for
@@ -510,6 +512,14 @@ struct _clib4 {
 
     /* ttyname */
     char tty_file_name[_POSIX_TTY_NAME_MAX];
+
+    /* Set of current actions.  If sa_handler for an entry is NULL, then
+     * that signal is not currently handled by the sigaction handler.
+     */
+    struct sigaction action_array[NSIG];
+
+    int __children;
+    int __was_sig;
 };
 
 #ifndef __getClib4

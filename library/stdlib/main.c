@@ -59,10 +59,9 @@ static uint32
 copyEnvironment(struct Hook *hook, struct envHookData *ehd, struct ScanVarsMsg *message) {
     DECLARE_UTILITYBASE();
 
-    if (strlen(message->sv_GDir) <= 4) {
+    if (Strlen(message->sv_GDir) <= 4) {
         if (ehd->env_size == ehd->allocated_size) {
-            if (!(ehd->r->__environment = realloc(ehd->r->__environment,
-                                                  ehd->allocated_size + 1024 * sizeof(char *)))) {
+            if (!(ehd->r->__environment = realloc(ehd->r->__environment, ehd->allocated_size + 1024 * sizeof(char *)))) {
                 return 1;
             }
             ClearMem((char *) ehd->r->__environment + ehd->allocated_size, 1024 * sizeof(char *));
@@ -70,14 +69,14 @@ copyEnvironment(struct Hook *hook, struct envHookData *ehd, struct ScanVarsMsg *
         }
 
         char **env = (char **) hook->h_Data;
-        uint32 size = strlen(message->sv_Name) + 1 + message->sv_VarLen + 1 + 1;
-        char *buffer = (char *) malloc(size);
+        uint32 size = Strlen(message->sv_Name) + 1 + message->sv_VarLen + 1 + 1;
+        char *buffer = (char *) AllocVecTags(size, AVT_Type, MEMF_SHARED, TAG_DONE);
         if (buffer == NULL) {
             return 1;
         }
 
         ++ehd->env_size;
-        snprintf(buffer, size - 1, "%s=%s", message->sv_Name, message->sv_Var);
+        SNPrintf(buffer, size - 1, "%s=%s", message->sv_Name, message->sv_Var);
         *env = buffer;
         env++;
         hook->h_Data = env;
@@ -205,7 +204,7 @@ out:
 
     SHOWMSG("Flush all files");
     /* Dump all currently unwritten data, especially to the console. */
-    __flush_all_files(-1);
+    __flush_all_files(__clib4, -1);
 
     /* If one of the destructors drops into exit(), either directly
        or through a failed assert() call, processing will resume with
@@ -266,11 +265,11 @@ _main(
         return -1;
     }
 
-    /* Set the current task pointer */
-    __clib4->self = me;
-
     reent_init(__clib4);
     __clib4->processId = pid;
+
+    /* Set the current task pointer */
+    __clib4->self = me;
 
     if (res) {
         size_t iter = 0;
@@ -302,14 +301,17 @@ _main(
     makeEnvironment(__clib4);
     if (!__clib4->__environment) {
         __clib4->__environment = empty_env;
+        __clib4->__environment_allocated = FALSE;
     }
+    else
+        __clib4->__environment_allocated = TRUE;
 
     /* Set default terminal mode to "amiga-clib4" if not set */
-    char term_buffer[32] = {0};
-    LONG term_len = GetVar("TERM", (STRPTR) term_buffer, 32, 0);
+    char term_buffer[FILENAME_MAX] = {0};
+    LONG term_len = GetVar("TERM", (STRPTR) term_buffer, FILENAME_MAX, 0);
     if (term_len <= 0) {
-        Strlcpy(term_buffer, "amiga-clib4", 11);
-        SetVar("TERM", term_buffer, 11, 0);
+        Strlcpy(term_buffer, "amiga-clib4", FILENAME_MAX);
+        SetVar("TERM", term_buffer, -1, GVF_LOCAL_ONLY);
     }
 
     /* The following code will be executed if the program is to keep
@@ -323,6 +325,9 @@ _main(
     /* We can enable check abort now */
     __clib4->__check_abort_enabled = TRUE;
 
+    /* At this point exe is fully initialized */
+    __clib4->__fully_initialized = TRUE;
+
     SHOWMSG("Call Main");
     /* We have enough room to make the call or just don't care. */
     rc = call_main(argstr, arglen, start_main, __EXT_CTOR_LIST__, __EXT_DTOR_LIST__, __clib4);
@@ -330,17 +335,37 @@ _main(
     /* Restore the task priority. */
     SetTaskPri((struct Task *) me, oldPriority);
 
+    /* Free environment memory */
+    if (__clib4->__environment_allocated) {
+        free(__clib4->__environment);
+        __clib4->__environment = NULL;
+    }
+
+    /* Check for getrandom fd */
+    if (__clib4->randfd[0] >= 0) {
+        SHOWMSG("Closing randfd[0]");
+        close(__clib4->randfd[0]);
+    }
+
+    if (__clib4->randfd[1] >= 0) {
+        SHOWMSG("Closing randfd[1]");
+        close(__clib4->randfd[1]);
+    }
+
     SHOWMSG("Calling clib4 dtors");
     _end_ctors(__DTOR_LIST__);
     SHOWMSG("Done. All destructors called");
 
     SHOWMSG("Calling reent_exit on _clib4");
     reent_exit(__clib4, FALSE);
+    SHOWMSG("Done");
 
     if (sms) {
         Forbid();
         ReplyMsg(&sms->sm_Message);
     }
+
+    SHOWMSG("Exit from _main");
 
     return rc;
 }
