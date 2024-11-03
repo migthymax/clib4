@@ -1,6 +1,7 @@
 #define VERSION			1
-#define REVISION		0
+#define REVISION		3
 #define SUBREVISION		0
+
 
 #define DATE			"25.09.2024"
 #define VERS			"clib4.library 1.0.0"
